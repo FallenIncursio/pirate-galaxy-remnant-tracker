@@ -31,7 +31,6 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory={unit_quote(config.parent)}
 ExecStart={unit_quote(python,command=True)} -m pg_remnants --config {unit_quote(config,command=True)} run
 Restart=on-failure
 RestartPreventExitStatus=2

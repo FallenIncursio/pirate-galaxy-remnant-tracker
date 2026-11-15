@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -108,6 +109,17 @@ webhook_environments=["HOOK_A","HOOK_B"]
         self.assertIn('WantedBy=default.target',unit)
         self.assertNotIn('password',unit.lower())
         with self.assertRaises(ValueError): module.unit_quote('/tmp/a\nExecStart=bad')
+
+    @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('systemd-analyze'), 'Requires systemd parser')
+    def test_generated_service_is_accepted_by_systemd(self):
+        path=Path(__file__).resolve().parents[1]/'scripts/install_systemd.py'
+        spec=importlib.util.spec_from_file_location('install_systemd',path)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory(prefix='remnant service ') as folder:
+            unit=Path(folder)/'remnant-parser-check.service'
+            unit.write_text(module.unit_text(Path(folder)/'100%/$private/config.toml',Path(sys.executable)))
+            result=subprocess.run(['systemd-analyze','verify',str(unit)],capture_output=True,text=True,timeout=30)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
 
 if __name__=='__main__': unittest.main()

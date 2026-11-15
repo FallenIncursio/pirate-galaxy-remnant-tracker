@@ -42,9 +42,11 @@ def fit(draw, value: str, width: int, size: int, bold=False):
     return value + '…'
 
 
-def text(draw, xy, value, size=20, color=WHITE, bold=False, width=None, right=False):
+def text(draw, xy, value, size=20, color=WHITE, bold=False, width=None, right=False, min_size=None):
     value = str(value)
     if width is not None:
+        while min_size is not None and size > min_size and draw.textlength(value, font=font(size, bold)) > width:
+            size -= 1
         value = fit(draw, value, width, size, bold)
     x, y = xy
     if right:
@@ -122,7 +124,7 @@ def render(snapshot: Snapshot | None, *, server: str, poll_seconds: int, now_ms:
         for field, title, x, width, color, unknown in columns:
             value = name(getattr(carrier,field))
             text(draw,(x,top+61),title,11,MUTED,True)
-            text(draw,(x,top+78),value or unknown,22,color if value else MUTED, bool(value),width=width)
+            text(draw,(x,top+78),value or unknown,22,color if value else MUTED, bool(value),width=width,min_size=18)
             estimate = (estimates or {}).get((carrier.kind, field))
             detail = reveal_detail(carrier,field,observed or now_ms,(history or {}).get(carrier.key),
                                    estimate,stale=bool(problem))
