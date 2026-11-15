@@ -128,7 +128,7 @@ class Collector:
             # The original login helper reads Windows environment names even headless.
             # Supply this host's identity and private per-run directories on Unix.
             env.update(COMPUTERNAME=platform.node(), Processor_Identifier=platform.machine(),
-                       Processor_Revision=platform.processor(), APPDATA=str(run / 'appdata'),
+                       Processor_Revision='', APPDATA=str(run / 'appdata'),
                        LOCALAPPDATA=str(run / 'localappdata'))
         env.update(PG_USERNAME=user, PG_PASSWORD=password, PG_REALM_ID=str(cfg.realm_id),
                    PG_SAMPLE_SECONDS=str(cfg.poll_seconds), PG_OUTPUT=str(run / 'events.jsonl'),
