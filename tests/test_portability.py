@@ -62,8 +62,8 @@ webhook_environments=["HOOK_A","HOOK_B"]
             c=load(p)
             self.assertEqual(c.backend,'process')
             self.assertEqual(c.webhook_names,('HOOK_A','HOOK_B'))
-            self.assertEqual(c.credentials_file,p.parent/'private/account.txt')
-            self.assertEqual(c.data,p.parent/'data')
+            self.assertEqual(c.credentials_file,(p.parent/'private/account.txt').resolve())
+            self.assertEqual(c.data,(p.parent/'data').resolve())
             for value in ('["BAD NAME"]','["DUP","DUP"]','"HOOK_A"'):
                 p.write_text(p.read_text().replace('["HOOK_A","HOOK_B"]',value))
                 with self.assertRaises(ValueError): load(p)

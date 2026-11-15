@@ -160,12 +160,16 @@ public final class HeadlessRemnant {
                 Thread.sleep(300); // library rate-limits its reference-queue cleanup
                 cleanup(session,"nL");
                 Object lock=RemnantData.field(session,"Ln");call(lock,"readLock");
+                boolean cleaned=true;
                 try{
                     Object registry=RemnantData.field(session,"LD");
                     for(Integer id:previous.ids)
-                        if(invoke(registry,"get",new Class<?>[]{int.class},id)!=null)return false;
+                        if(invoke(registry,"get",new Class<?>[]{int.class},id)!=null){cleaned=false;break;}
                 }finally{call(lock,"readUnlock");}
-                emit("intel_graph_released","remote_count",previous.graph.size());return true;
+                if(cleaned){emit("intel_graph_released","remote_count",previous.graph.size());return true;}
+                // A concurrent heartbeat may have consumed the cleanup time slot
+                // before the GC queue was ready. Retry the ordinary cleanup; keep
+                // the fresh-login fallback if the registry cannot be verified.
             }
             Thread.sleep(50);
         }
