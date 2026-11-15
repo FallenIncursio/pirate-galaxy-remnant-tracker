@@ -5,10 +5,11 @@ import sqlite3
 from pathlib import Path
 
 from .model import Snapshot, changes
+from .estimates import RevealModel
 
 
 class Store:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, poll_seconds: int = 180):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute('PRAGMA journal_mode=WAL')
@@ -32,6 +33,9 @@ class Store:
                 self.db.execute('DELETE FROM intel_seen')
             for row in self.db.execute('SELECT payload FROM snapshots WHERE observed>? ORDER BY observed', (cutoff,)):
                 self._observe_intel(Snapshot.from_dict(json.loads(row[0])))
+        self.reveals = RevealModel(poll_seconds)
+        for row in self.db.execute('SELECT payload FROM snapshots ORDER BY observed'):
+            self.reveals.observe(Snapshot.from_dict(json.loads(row[0])))
 
     def _observe_intel(self, snapshot: Snapshot) -> None:
         for carrier in snapshot.carriers:
@@ -45,7 +49,7 @@ class Store:
                             ELSE intel_seen.last_unknown END,
                         last_observed=excluded.last_observed''',
                     (snapshot.realm_id, carrier.key, field, snapshot.observed_ms if known else None,
-                     snapshot.observed_ms if not known and snapshot.fresh_session else None, snapshot.observed_ms))
+                     snapshot.observed_ms if not known and snapshot.verified_fresh else None, snapshot.observed_ms))
         self.db.execute("INSERT OR REPLACE INTO metadata VALUES ('intel_history_v2',?)", (str(snapshot.observed_ms),))
 
     def intel_history(self, snapshot: Snapshot) -> dict:
@@ -72,7 +76,12 @@ class Store:
             self._observe_intel(snapshot)
             self.db.execute('DELETE FROM snapshots WHERE observed < ?', (snapshot.observed_ms - retention_days * 86400000,))
             self.db.execute('DELETE FROM intel_seen WHERE last_observed < ?', (snapshot.observed_ms - retention_days * 86400000,))
+        self.reveals.observe(snapshot)
+        self.reveals.prune(snapshot.observed_ms-retention_days*86400000)
         return delta
+
+    def reveal_estimates(self, snapshot: Snapshot, retention_days: int = 30) -> dict:
+        return self.reveals.estimates(snapshot.realm_id, snapshot.observed_ms-retention_days*86400000)
 
     def message(self, target: str) -> str | None:
         row = self.db.execute('SELECT message_id FROM publisher WHERE target=?', (target,)).fetchone()

@@ -24,7 +24,7 @@ class IntelTests(unittest.TestCase):
     def test_unknown_reveals_have_no_fabricated_countdown(self):
         carrier = replace(self.carrier, category=None, planet=None, system=None)
         for field in ('category','planet'):
-            self.assertEqual(reveal_detail(carrier,field,NOW), 'Zeit offen · bei Anschuss sofort')
+            self.assertEqual(reveal_detail(carrier,field,NOW), 'Lerne Reveal-Zeit · noch keine Messung')
         self.assertIn('Meldung ausstehend',reveal_detail(carrier,'system',NOW))
         future = replace(carrier,spawn_ms=NOW+60000)
         self.assertIn('in 1 min',reveal_detail(future,'system',NOW))
@@ -98,6 +98,6 @@ class IntelTests(unittest.TestCase):
         for snapshot in (None,replace(self.snapshot,carriers=()),huge):
             png=render(snapshot,server='Korell',poll_seconds=180,now_ms=NOW)
             with Image.open(io.BytesIO(png)) as image:
-                self.assertLess(image.height,3100)
+                self.assertLess(image.height,3300)
             data=payload(snapshot,server='Korell',username='Test',poll_seconds=180,now_ms=NOW)
             self.assertLessEqual(len(data['attachments'][0]['description']),1024)

@@ -7,12 +7,12 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 
 from .card import LABELS
-from .intel import clock, departure_detail, duration, reveal_detail
+from .intel import clock, departure_detail, duration, reveal_detail, estimate_basis
 from .model import Snapshot
 
 WIDTH = 1200
-ROW_HEIGHT = 168
-ROW_STEP = 180
+ROW_HEIGHT = 184
+ROW_STEP = 196
 MAX_ROWS = 15
 GOLD, PURPLE, WHITE, MUTED = '#e9c653', '#d979fa', '#ecf1f4', '#9babb6'
 GREEN, BLUE, LINE = '#74ff9f', '#a6d9ef', '#314145'
@@ -70,7 +70,7 @@ def glyph(draw, x, y, boss):
 
 
 def render(snapshot: Snapshot | None, *, server: str, poll_seconds: int, now_ms: int,
-           problem: str | None = None, history: dict | None = None) -> bytes:
+           problem: str | None = None, history: dict | None = None, estimates: dict | None = None) -> bytes:
     carriers = sorted(snapshot.carriers, key=lambda c: (c.spawn_ms,c.name)) if snapshot else ()
     visible = carriers[:MAX_ROWS]
     rows = max(1, len(visible))
@@ -122,9 +122,13 @@ def render(snapshot: Snapshot | None, *, server: str, poll_seconds: int, now_ms:
             value = name(getattr(carrier,field))
             text(draw,(x,top+61),title,11,MUTED,True)
             text(draw,(x,top+78),value or unknown,22,color if value else MUTED, bool(value),width=width)
-            detail = reveal_detail(carrier,field,observed or now_ms,(history or {}).get(carrier.key))
-            text(draw,(x,top+109),detail,13,MUTED,width=width)
-        bar_x, bar_y, bar_w = 158, top+145, 290
+            estimate = (estimates or {}).get((carrier.kind, field))
+            detail = reveal_detail(carrier,field,observed or now_ms,(history or {}).get(carrier.key),
+                                   estimate,stale=bool(problem))
+            text(draw,(x,top+109),detail,13,BLUE if estimate and not value else MUTED,width=width)
+            if not value and field != 'system':
+                text(draw,(x,top+127),estimate_basis(carrier,estimate),12,MUTED,width=width)
+        bar_x, bar_y, bar_w = 158, top+161, 290
         draw.rounded_rectangle((bar_x,bar_y,bar_x+bar_w,bar_y+8),radius=3,fill='#263538')
         if carrier.hp is None:
             for offset in range(0,bar_w,17):
@@ -132,12 +136,12 @@ def render(snapshot: Snapshot | None, *, server: str, poll_seconds: int, now_ms:
         elif carrier.hp:
             fill = '#da6659' if carrier.hp<30 else '#e9b856' if carrier.hp<60 else '#78c9a3'
             draw.rectangle((bar_x,bar_y,bar_x+round(bar_w*carrier.hp/100),bar_y+8),fill=fill)
-        text(draw,(465,top+136),'HP unbekannt' if carrier.hp is None else f'HP {carrier.hp} %',16,MUTED if carrier.hp is None else WHITE,True)
-        text(draw,(1134,top+136),departure_detail(carrier,observed or now_ms,stale=bool(problem)),16,BLUE if carrier.departure_ms else MUTED,right=True)
+        text(draw,(465,top+152),'HP unbekannt' if carrier.hp is None else f'HP {carrier.hp} %',16,MUTED if carrier.hp is None else WHITE,True)
+        text(draw,(1134,top+152),departure_detail(carrier,observed or now_ms,stale=bool(problem)),16,BLUE if carrier.departure_ms else MUTED,right=True)
     draw.line((50,footer_y+3,1150,footer_y+3),fill=LINE)
     footer = problem or ('Alle gelisteten Träger' if len(carriers)<=MAX_ROWS else f'Anzeige {MAX_ROWS} von {len(carriers)} Trägern · vollständiger Verlauf lokal')
     text(draw,(52,footer_y+13),footer,16,'#e8b26b' if problem else WHITE,True,width=1095)
-    text(draw,(52,footer_y+39),'Reveal-Zeit offen: Der Server meldet keinen Termin. Anschuss legt alle Informationen sofort offen.',15,MUTED,width=1095)
+    text(draw,(52,footer_y+39),'Geschätzt = aus Verlauf, kein Server-Termin. SC/XC getrennt · n = Messungen · bei Anschuss sofort.',15,MUTED,width=1095)
     text(draw,(52,footer_y+65),'Erfasst / Reveal = Beobachtung des Trackers  ·  Zeiten: Europe/Berlin  ·  Countdown gilt zum Datenstand',13,MUTED,width=1095)
     output = BytesIO()
     image.save(output,format='PNG',optimize=True)

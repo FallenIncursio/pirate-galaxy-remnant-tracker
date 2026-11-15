@@ -23,7 +23,7 @@ def run(config: Config, *, cycles: int = 0, dry_run: bool = False, max_seconds: 
 
 
 def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int:
-    store = Store(config.data / 'history.sqlite3')
+    store = Store(config.data / 'history.sqlite3', config.poll_seconds)
     collector = Collector(config)
     publisher = None if dry_run else Publisher(os.environ.get(config.webhook_environment, ''), store)
     snapshot = store.latest(config.realm_id)
@@ -40,6 +40,8 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
         atomic_json(status_path, {'state': state, 'pid': os.getpid(), 'updated_ms': int(time.time()*1000),
                                  'snapshots_this_run': count, 'last_observed_ms': snapshot.observed_ms if snapshot else None,
                                  'discord': last_result, 'dry_run': dry_run, 'poll_seconds': config.poll_seconds,
+                                 'freshness': ('new_session' if snapshot.fresh_session else 'released_graph'
+                                               if snapshot.fresh_graph else 'unverified') if snapshot else None,
                                  'problem': problem or discord_problem})
     def publish(reason=None, delta=()):
         nonlocal last_publish, last_result, discord_problem
@@ -47,7 +49,8 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
         card = payload(snapshot, server=config.server, username=config.username, poll_seconds=config.poll_seconds,
                        now_ms=now_ms, delta=delta, problem=reason)
         png = render(snapshot, server=config.server, poll_seconds=config.poll_seconds, now_ms=now_ms,
-                     problem=reason, history=store.intel_history(snapshot) if snapshot else {})
+                     problem=reason, history=store.intel_history(snapshot) if snapshot else {},
+                     estimates=store.reveal_estimates(snapshot, config.retention_days) if snapshot else {})
         image_path = config.data / 'status-card.png'
         image_path.with_suffix('.tmp').write_bytes(png)
         os.replace(image_path.with_suffix('.tmp'), image_path)
@@ -81,8 +84,8 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
                 kind = event.get('event')
                 if kind == 'snapshot':
                     candidate = Snapshot.from_event(event, config.realm_id, int(time.time()*1000))
-                    if not candidate.fresh_session:
-                        raise ValueError('Collector snapshot lacks a fresh authenticated session')
+                    if not candidate.verified_fresh:
+                        raise ValueError('Collector snapshot lacks verified fresh data')
                     delta = store.record(candidate, config.retention_days)
                     snapshot, last_valid, failures, problem = candidate, now, 0, None
                     count += 1

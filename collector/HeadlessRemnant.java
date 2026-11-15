@@ -5,6 +5,7 @@ import java.nio.file.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.lang.ref.WeakReference;
 
 /** Minimal normal-login RPC client: no game main, renderer, input, movement or combat. */
 public final class HeadlessRemnant {
@@ -119,6 +120,57 @@ public final class HeadlessRemnant {
             ready=true;return network;
         }finally{if(!ready&&network!=null){expectedDisconnect=true;try{call(network,"disconnect");}catch(Exception ignored){}}}
     }
+    static final class Observation {
+        final List<Object> rows;
+        final List<WeakReference<jq>> graph=new ArrayList<>();
+        final List<Integer> ids=new ArrayList<>();
+        Observation(ais container,Object session)throws Exception{
+            rows=RemnantData.snapshot(container);
+            Set<jq> seen=Collections.newSetFromMap(new IdentityHashMap<jq,Boolean>());
+            ArrayList<jq> pending=new ArrayList<>();pending.add(container);
+            for(int i=0;i<pending.size();i++){
+                jq object=pending.get(i);if(!seen.add(object))continue;
+                graph.add(new WeakReference<>(object));
+                int id=(Integer)invoke(session,"case",new Class<?>[]{jq.class},object);
+                if(id==0)throw new IllegalStateException("Unregistered intel remote");ids.add(id);
+                if(object instanceof jr)((jr)object).getRelatedRemotes(pending);
+            }
+        }
+    }
+    static Object session(Object network)throws Exception{
+        return invoke(call(network,"dm"),"do",new Class<?>[]{type("kd")},call(network,"getContentListener"));
+    }
+    static Observation observe(ach intel,Object session)throws Exception{
+        ais container=intel.getSkullCarrierContainer();
+        if(container==null)throw new IllegalStateException("No Remnant container");
+        return new Observation(container,session);
+    }
+    static void cleanup(Object session,String method)throws Exception{
+        Method action=type("is").getDeclaredMethod(method);action.setAccessible(true);action.invoke(session);
+    }
+    static boolean releaseGraph(Object session,Observation previous)throws Exception{
+        // Use the library's ordinary expired-pin / weak-reference cleanup. Never
+        // alter player data, authentication, server permissions or registry maps.
+        cleanup(session,"nK"); // transient serialization pins expire after 20s
+        System.gc();
+        for(int i=0;i<20;i++){
+            boolean released=true;
+            for(WeakReference<jq> ref:previous.graph)if(ref.get()!=null){released=false;break;}
+            if(released){
+                Thread.sleep(300); // library rate-limits its reference-queue cleanup
+                cleanup(session,"nL");
+                Object lock=RemnantData.field(session,"Ln");call(lock,"readLock");
+                try{
+                    Object registry=RemnantData.field(session,"LD");
+                    for(Integer id:previous.ids)
+                        if(invoke(registry,"get",new Class<?>[]{int.class},id)!=null)return false;
+                }finally{call(lock,"readUnlock");}
+                emit("intel_graph_released","remote_count",previous.graph.size());return true;
+            }
+            Thread.sleep(50);
+        }
+        emit("intel_graph_retained","remote_count",previous.graph.size());return false;
+    }
     public static void main(String[] args)throws Exception{
         output=Paths.get(System.getenv("PG_OUTPUT"));
         Thread timeout=new Thread(()->{try{while(true){Thread.sleep(1000);if(System.nanoTime()>deadline){emit("failure","type","DeadlineExceeded","fatal",false);System.exit(4);}}}catch(Exception ignored){}});timeout.setDaemon(true);timeout.start();
@@ -130,27 +182,29 @@ public final class HeadlessRemnant {
             type("pw").getMethod("do",long.class,clockMode).invoke(null,10L,Enum.valueOf((Class)clockMode,"MILLISECONDS"));
             int realmId=setting("PG_REALM_ID",2),interval=setting("PG_SAMPLE_SECONDS",180),limit=setting("PG_MAX_SAMPLES",0),sample=0;
             if(interval<60||interval>3600)throw new Fatal();
-            long next=0;
+            long next=0;ach intel=null;Object currentSession=null;Observation previous=null;
             while(!stopping()&&(limit==0||sample<limit)){
-                // A returned RPC object graph reuses registered remotes within a session.
-                // Without the Remnant unlock, later intel changes were not delivered to
-                // those remotes. A normal fresh login gives an authoritative new graph.
-                while(!stopping()&&System.nanoTime()<next-TimeUnit.SECONDS.toNanos(15))Thread.sleep(250);
+                while(!stopping()&&!disconnected&&System.nanoTime()<next-(network==null?TimeUnit.SECONDS.toNanos(15):0))Thread.sleep(100);
                 if(stopping())break;
                 deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(90);
-                expectedDisconnect=false;disconnected=false;
-                network=openSession(realmId);
-                ach intel=(ach)api(network,false,"com.splitscreen.ach");
+                boolean freshSession=network==null||disconnected;
+                if(!freshSession&&previous!=null&&!releaseGraph(currentSession,previous)){
+                    emit("session_refresh_fallback","reason","intel_graph_retained");freshSession=true;
+                }
+                previous=null;
+                if(freshSession){
+                    expectedDisconnect=true;if(network!=null)call(network,"disconnect");
+                    expectedDisconnect=false;disconnected=false;
+                    network=openSession(realmId);
+                    intel=(ach)api(network,false,"com.splitscreen.ach");currentSession=session(network);
+                }
                 while(!stopping()&&!disconnected&&System.nanoTime()<next)Thread.sleep(50);
                 if(stopping())break;
                 if(disconnected)throw new IllegalStateException("Disconnected before observation");
-                long before=System.nanoTime();ais container=intel.getSkullCarrierContainer();
-                if(container==null)throw new IllegalStateException("No Remnant container");
-                emit("snapshot","realm_id",realmId,"sample",++sample,"fresh_session",true,
-                     "request_duration_ms",(System.nanoTime()-before)/1000000,"carriers",RemnantData.snapshot(container));
+                long before=System.nanoTime();previous=observe(intel,currentSession);
+                emit("snapshot","realm_id",realmId,"sample",++sample,"fresh_session",freshSession,"fresh_graph",true,
+                     "request_duration_ms",(System.nanoTime()-before)/1000000,"carriers",previous.rows);
                 next=System.nanoTime()+TimeUnit.SECONDS.toNanos(interval);
-                expectedDisconnect=true;call(network,"disconnect");network=null;
-                emit("session_released","sample",sample);
                 deadline=next+TimeUnit.SECONDS.toNanos(90);
             }
             emit("complete","disconnected",false);exitCode=0;
