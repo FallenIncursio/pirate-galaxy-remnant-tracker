@@ -24,6 +24,7 @@ def font(size: int, bold: bool = False):
     names = ('seguisb.ttf', 'segoeuib.ttf', 'arialbd.ttf') if bold else ('segoeui.ttf', 'arial.ttf')
     candidates = [windows / name for name in names]
     candidates += [Path('/usr/share/fonts/truetype/dejavu') / ('DejaVuSans-Bold.ttf' if bold else 'DejaVuSans.ttf'),
+                   Path('/usr/share/fonts/dejavu-sans-fonts') / ('DejaVuSans-Bold.ttf' if bold else 'DejaVuSans.ttf'),
                    Path('/usr/share/fonts/truetype/liberation2') / ('LiberationSans-Bold.ttf' if bold else 'LiberationSans-Regular.ttf')]
     for path in candidates:
         if path.is_file():

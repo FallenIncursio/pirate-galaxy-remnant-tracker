@@ -10,6 +10,7 @@ LABELS = {
     'sol.name': 'Sol', 'draconis.name': 'Draconis', 'sirius.name': 'Sirius',
     '$taucetimantis.name': 'Tau Ceti / Oort', 'tauceti.name': 'Tau Ceti',
     'antares3planet': 'Lustra', 'antares4planet': 'Terasa',
+    'sol1planet': 'Mars',
     'mizar2planet': 'Molikar', 'draconis2planet': 'Mantis Hive',
     'gemini3planet': 'Prosperous', 'gemini4planet': 'Commerce Central', 'gemini5planet': 'Technatoria',
     'mantis1planet': 'Erebos', 'sol3invadedplanet': 'Erde (in Aufruhr)',
@@ -22,6 +23,7 @@ LABELS = {
     '$item.category.activeitem.shock': 'Item der Shock-Klasse',
     '$item.category.activeitem.sniper': 'Item der Sniper-Klasse',
     '$item.category.shipupgrade.alloy': 'Legierungs-Upgrade',
+    '$item.category.shipupgrade.itemslot': 'Komponenten-Slot-Upgrade',
 }
 
 
