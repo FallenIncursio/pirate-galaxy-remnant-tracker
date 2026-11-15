@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .config import Config, credentials
 
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+
 
 def command(args, **kwargs):
     return subprocess.run([str(a) for a in args], capture_output=True, timeout=40,
@@ -68,10 +70,14 @@ class Collector:
         self.pending = b''
         self.started = 0.0
         self.classes = config.data / 'classes'
+        self.process: subprocess.Popen | None = None
 
     def prepare(self) -> None:
         cfg = self.config
-        check_box(cfg)
+        if cfg.backend == 'sandboxie':
+            if os.name != 'nt':
+                raise RuntimeError('Sandboxie requires Windows; use the process backend on Linux')
+            check_box(cfg)
         self.manifest = read_json(cfg.runtime_manifest)
         base = cfg.runtime_manifest.parent
         for relative, expected in self.manifest['hashes'].items():
@@ -79,8 +85,10 @@ class Collector:
             if not path.is_relative_to(base.resolve()) or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
                 raise RuntimeError('Runtime input changed; run setup and validate compatibility')
         self.java = base / self.manifest['java']
+        if self.manifest.get('java_sha256') and hashlib.sha256(self.java.read_bytes()).hexdigest() != self.manifest['java_sha256']:
+            raise RuntimeError('Java executable changed; update the verified runtime manifest')
         self.cp = os.pathsep.join(str(base / p) for p in self.manifest['classpath'])
-        sources = [cfg.root / 'collector/HeadlessRemnant.java', cfg.root / 'collector/RemnantData.java']
+        sources = [SOURCE_ROOT / 'collector/HeadlessRemnant.java', SOURCE_ROOT / 'collector/RemnantData.java']
         source_hash = hashlib.sha256(b''.join(s.read_bytes() for s in sources) + self.cp.encode()).hexdigest()
         stamp = self.classes / 'source.sha256'
         if not stamp.exists() or stamp.read_text() != source_hash:
@@ -93,38 +101,52 @@ class Collector:
 
     def start(self) -> None:
         cfg = self.config
-        if box_pids(cfg):
+        if self.run is not None:
+            raise RuntimeError('Collector is already started')
+        if cfg.backend == 'sandboxie' and box_pids(cfg):
             raise RuntimeError('Dedicated collector sandbox is already occupied')
         run = cfg.data / 'runs' / str(time.time_ns())
         for folder in ('', 'home', 'temp', 'appdata', 'localappdata', 'no-natives'):
-            (run / folder).mkdir(parents=True, exist_ok=True)
+            (run / folder).mkdir(parents=True, exist_ok=True, mode=0o700)
         (run / 'log4j2.xml').write_text('<Configuration status="OFF"><Loggers><Root level="OFF"/></Loggers></Configuration>')
         args = ['-XX:+DisableAttachMechanism', '-Xverify:all', '-Xms32m', '-Xmx256m', '-Djava.awt.headless=true',
                 '-Duser.home=' + str(run / 'home'), '-Djava.io.tmpdir=' + str(run / 'temp'),
                 '-Djava.library.path=' + str(run / 'no-natives'), '-Dlog4j1.compatibility=true',
                 '-Dlog4j.configurationFile=' + str(run / 'log4j2.xml'),
                 '-cp', str(self.classes) + os.pathsep + self.cp, 'HeadlessRemnant']
-        atomic_json(run / 'launch.json', {'java': str(self.java), 'arguments': subprocess.list2cmdline(args)})
-        guest = cfg.root / 'windows/collector-guest.ps1'
+        atomic_json(run / 'launch.json', {'java': str(self.java), 'arguments': args})
+        guest = SOURCE_ROOT / 'windows/collector-guest.ps1'
         user, password = credentials(cfg.credentials_file)
         env = {k: v for k, v in os.environ.items() if not k.startswith('DISCORD_WEBHOOK')}
-        env.pop(cfg.webhook_environment, None)
+        for name in cfg.webhook_names:
+            env.pop(name, None)
         for k in ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'EXTRACT_NATIVES',
                   'PG_TEST_AWT_DRIVER', 'PG_TEST_DRIVER_DIR'):
             env.pop(k, None)
         env.update(PG_USERNAME=user, PG_PASSWORD=password, PG_REALM_ID=str(cfg.realm_id),
                    PG_SAMPLE_SECONDS=str(cfg.poll_seconds), PG_OUTPUT=str(run / 'events.jsonl'),
                    PG_STOP_FILE=str(run / 'stop.request'), PG_MAX_SAMPLES='0')
-        powershell = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-        result = command([cfg.sandbox_start, '/box:' + cfg.sandbox_box, powershell, '-NoLogo', '-NoProfile',
-                          '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', guest, '-RunDirectory', run],
-                         env=env, cwd=run)
+        if cfg.backend == 'sandboxie':
+            # PowerShell Start-Process expects an already quoted argument string.
+            atomic_json(run / 'launch.json', {'java': str(self.java), 'arguments': subprocess.list2cmdline(args)})
+            powershell = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+            result = command([cfg.sandbox_start, '/box:' + cfg.sandbox_box, powershell, '-NoLogo', '-NoProfile',
+                              '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', guest, '-RunDirectory', run],
+                             env=env, cwd=run)
+            if result.returncode:
+                raise RuntimeError('Cannot launch collector in Sandboxie')
+            self.output = shadow(cfg, run)
+        else:
+            self.process = subprocess.Popen([str(self.java), *args], cwd=run, env=env,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            self.output = run
+            atomic_json(run / 'running.json', {'pid': self.process.pid, 'started_ms': int(time.time()*1000)})
         del env, user, password
-        if result.returncode:
-            raise RuntimeError('Cannot launch collector in Sandboxie')
-        self.run, self.output = run, shadow(cfg, run)
+        self.run = run
         self.offset, self.pending, self.started = 0, b'', time.monotonic()
-        atomic_json(cfg.data / 'collector.json', {'run': str(run), 'output': str(self.output), 'box': cfg.sandbox_box})
+        atomic_json(cfg.data / 'collector.json', {'run': str(run), 'output': str(self.output),
+                    'backend': cfg.backend, 'box': cfg.sandbox_box if cfg.backend=='sandboxie' else None})
 
     def events(self) -> list[dict]:
         if self.output is None:
@@ -144,6 +166,8 @@ class Collector:
         return [json.loads(line) for line in lines if line.strip()]
 
     def exit_code(self) -> int | None:
+        if self.process is not None:
+            return self.process.poll()
         try:
             return int(read_json(self.output / 'exit.json')['exit_code']) if self.output else None
         except FileNotFoundError:
@@ -153,6 +177,20 @@ class Collector:
         if self.run is None:
             return
         (self.run / 'stop.request').touch()
+        if self.process is not None:
+            try:
+                self.process.wait(timeout=12)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+            atomic_json(self.run / 'exit.json', {'pid': self.process.pid, 'exit_code': self.process.returncode})
+            self.process = None
+            self.run = None
+            return
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline and box_pids(self.config):
             time.sleep(0.25)

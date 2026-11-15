@@ -1,6 +1,8 @@
 import argparse
 import json
 import logging
+import os
+import signal
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -10,6 +12,8 @@ from .service import run
 
 
 def main() -> int:
+    if os.name != 'nt':
+        os.umask(0o077)
     parser = argparse.ArgumentParser(description='Pirate Galaxy Remnant Tracker')
     parser.add_argument('--config', type=Path, default=Path('config.toml'))
     sub = parser.add_subparsers(dest='command', required=True)
@@ -44,6 +48,9 @@ def main() -> int:
             return 0
         if args.cycles < 0 or args.max_seconds < 0:
             raise ValueError('Run limits must be non-negative')
+        def terminate(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, terminate)
         return run(config, cycles=args.cycles, dry_run=args.dry_run, max_seconds=args.max_seconds)
     except Exception as error:
         # No arbitrary exception messages/tracebacks: URLs, credentials and native login data stay private.

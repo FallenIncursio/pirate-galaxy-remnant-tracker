@@ -1,6 +1,9 @@
 /.venv/
 /config.toml
 /secrets.env
+/credentials.env
+*.pem
+*.key
 /.env
 /data/
 /logs/

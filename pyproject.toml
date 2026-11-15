@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pirate-galaxy-remnant-tracker"
-version = "0.3.0"
+version = "0.4.0"
 description = "Headless Pirate Galaxy Remnant carrier tracking with persistent Discord status"
 requires-python = ">=3.11"
 license = {text = "MIT"}

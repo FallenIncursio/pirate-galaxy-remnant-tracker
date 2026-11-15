@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .card import payload
 from .config import Config
@@ -25,7 +26,14 @@ def run(config: Config, *, cycles: int = 0, dry_run: bool = False, max_seconds: 
 def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int:
     store = Store(config.data / 'history.sqlite3', config.poll_seconds)
     collector = Collector(config)
-    publisher = None if dry_run else Publisher(os.environ.get(config.webhook_environment, ''), store)
+    publishers = {}
+    if not dry_run:
+        seen = set()
+        for name in config.webhook_names:
+            publisher = Publisher(os.environ.get(name, ''), store)
+            if publisher.target not in seen:
+                publishers[name] = publisher
+                seen.add(publisher.target)
     snapshot = store.latest(config.realm_id)
     stop_path = config.data / 'tracker-stop.request'
     stop_path.unlink(missing_ok=True)
@@ -33,6 +41,7 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
     count, failures, retry_at, last_publish, last_valid = 0, 0, 0.0, started, 0.0
     problem, fatal, active, last_result = 'Verbindung wird aufgebaut', False, False, None
     discord_problem = None
+    discord_targets = {}
     status_path = config.data / 'status.json'
     def status(state):
         if state == 'running' and discord_problem:
@@ -40,6 +49,7 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
         atomic_json(status_path, {'state': state, 'pid': os.getpid(), 'updated_ms': int(time.time()*1000),
                                  'snapshots_this_run': count, 'last_observed_ms': snapshot.observed_ms if snapshot else None,
                                  'discord': last_result, 'dry_run': dry_run, 'poll_seconds': config.poll_seconds,
+                                 'discord_targets': discord_targets,
                                  'freshness': ('new_session' if snapshot.fresh_session else 'released_graph'
                                                if snapshot.fresh_graph else 'unverified') if snapshot else None,
                                  'problem': problem or discord_problem})
@@ -54,17 +64,33 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
         image_path = config.data / 'status-card.png'
         image_path.with_suffix('.tmp').write_bytes(png)
         os.replace(image_path.with_suffix('.tmp'), image_path)
-        if publisher:
-            try:
-                last_result = publisher.publish(card, now_ms, image=png)
-            except DiscordError:
-                discord_problem = 'Discord-Aktualisierung fehlgeschlagen'
-                raise
-            discord_problem = None
-            last_result['published_ms'] = now_ms
-            with (config.data / 'publications.jsonl').open('a', encoding='utf-8') as stream:
-                stream.write(json.dumps(last_result) + '\n')
-            LOGGER.info('Discord %s confirmed for persistent status card', last_result['method'])
+        if publishers:
+            # Network requests run independently; SQLite stays on the service thread.
+            failed = []
+            primary = next(iter(publishers))
+            with ThreadPoolExecutor(max_workers=len(publishers)) as pool:
+                pending = {pool.submit(p.publish,card,now_ms,image=png,
+                                       message_id=store.message(p.target),persist=False): (name,p)
+                           for name,p in publishers.items()}
+                for future in as_completed(pending):
+                    name,publisher = pending[future]
+                    try:
+                        receipt = future.result()
+                    except DiscordError as error:
+                        failed.append(name)
+                        discord_targets[name] = {'state':'error','attempted_ms':now_ms,
+                                                 'last_success':discord_targets.get(name,{}).get('last_success')}
+                        LOGGER.error('Discord target %s: %s',name,error)
+                        continue
+                    store.save_message(publisher.target,receipt['message_id'],receipt['channel_id'],now_ms)
+                    receipt.update(published_ms=now_ms,target=name)
+                    discord_targets[name] = {'state':'ok','last_success':receipt}
+                    if name == primary:
+                        last_result = receipt
+                    with (config.data / 'publications.jsonl').open('a',encoding='utf-8') as stream:
+                        stream.write(json.dumps(receipt)+'\n')
+                    LOGGER.info('Discord %s confirmed for target %s',receipt['method'],name)
+            discord_problem = f'Discord-Aktualisierung fehlgeschlagen: {len(failed)}/{len(publishers)} Ziele' if failed else None
         else:
             atomic_json(config.data / 'preview.json', card)
             LOGGER.info('Dry run: status card prepared without Discord')
@@ -134,7 +160,7 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
         collector.stop()
         problem = 'Tracker gestoppt – letzter bestätigter Stand'
         try:
-            if last_result:
+            if discord_targets:
                 publish(reason=problem)
         except DiscordError as error:
             LOGGER.error('%s', error)

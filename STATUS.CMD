@@ -1,4 +1,8 @@
 @echo off
 cd /d "%~dp0"
-python scripts\tracker.py --config config.toml status
+if exist ".venv\Scripts\python.exe" (
+  .venv\Scripts\python.exe scripts\tracker.py --config config.toml status
+) else (
+  python scripts\tracker.py --config config.toml status
+)
 pause

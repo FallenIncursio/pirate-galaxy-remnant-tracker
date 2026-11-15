@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 from .storage import Store
 
+_STORED_MESSAGE = object()
+
 
 class DiscordError(RuntimeError):
     def __init__(self, status: int | None = None, code: int | None = None):
@@ -83,8 +85,10 @@ class Publisher:
                 raise DiscordError() from None
         raise DiscordError(429)
 
-    def publish(self, payload: dict, now_ms: int, *, image: bytes | None = None) -> dict:
-        message_id = self.store.message(self.target)
+    def publish(self, payload: dict, now_ms: int, *, image: bytes | None = None,
+                message_id=_STORED_MESSAGE, persist: bool = True) -> dict:
+        if message_id is _STORED_MESSAGE:
+            message_id = self.store.message(self.target)
         method = 'PATCH' if message_id else 'POST'
         try:
             result = self.request(method, f'/messages/{message_id}' if message_id else '?wait=true', payload, image=image)
@@ -116,7 +120,8 @@ class Publisher:
                 image_id = confirmed_image(self.request('GET', f'/messages/{message_id}'))
             if not image_id or not image_id.isdigit():
                 raise DiscordError(200)
-        self.store.save_message(self.target, message_id, channel_id, now_ms)
+        if persist:
+            self.store.save_message(self.target, message_id, channel_id, now_ms)
         return {'method': method, 'message_id': message_id, 'channel_id': channel_id,
                 'timestamp': result.get('timestamp'), 'edited_timestamp': result.get('edited_timestamp'),
                 'attachment_id': image_id}

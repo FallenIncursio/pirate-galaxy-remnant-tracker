@@ -6,17 +6,20 @@ retention_days = 30
 
 [runtime]
 # Local credential file with Name: and PW: lines. Never commit it.
-credentials_file = 'C:\private\PG Cred.txt'
+credentials_file = "credentials.env"
 manifest = "data/runtime/manifest.json"
+# Windows default: sandboxie. Linux: process (with systemd for unattended use).
+# backend = "process"
 
 [sandbox]
-start = 'C:\Program Files\Sandboxie-Plus\Start.exe'
+start = '%ProgramFiles%/Sandboxie-Plus/Start.exe'
 box = "PirateGalaxyRemnants"
-root = 'D:\PirateGalaxyRemnantTracker\data\sandbox'
+root = 'data/sandbox'
 
 [paths]
 data = "data"
 
 [discord]
 username = "Remnant Tracker"
-webhook_environment = "DISCORD_WEBHOOK_URL"
+webhook_environments = ["DISCORD_WEBHOOK_URL"]
+# For a second channel: ["DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK_SECONDARY_URL"]
