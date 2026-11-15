@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import subprocess
 import time
 from pathlib import Path
@@ -123,6 +124,12 @@ class Collector:
         for k in ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'EXTRACT_NATIVES',
                   'PG_TEST_AWT_DRIVER', 'PG_TEST_DRIVER_DIR'):
             env.pop(k, None)
+        if os.name != 'nt':
+            # The original login helper reads Windows environment names even headless.
+            # Supply this host's identity and private per-run directories on Unix.
+            env.update(COMPUTERNAME=platform.node(), Processor_Identifier=platform.machine(),
+                       Processor_Revision=platform.processor(), APPDATA=str(run / 'appdata'),
+                       LOCALAPPDATA=str(run / 'localappdata'))
         env.update(PG_USERNAME=user, PG_PASSWORD=password, PG_REALM_ID=str(cfg.realm_id),
                    PG_SAMPLE_SECONDS=str(cfg.poll_seconds), PG_OUTPUT=str(run / 'events.jsonl'),
                    PG_STOP_FILE=str(run / 'stop.request'), PG_MAX_SAMPLES='0')
