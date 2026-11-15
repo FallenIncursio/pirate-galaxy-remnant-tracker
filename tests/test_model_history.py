@@ -60,22 +60,23 @@ class ModelTests(unittest.TestCase):
         snap = replace(snap, carriers=(replace(snap.carriers[0], name='@everyone *test*'),))
         card = payload(snap, server='Korell', username='Test', poll_seconds=180, now_ms=NOW)
         self.assertEqual(card['allowed_mentions'], {'parse': []})
-        field = card['embeds'][0]['fields'][0]
-        self.assertNotIn('@everyone', field['name'])
-        self.assertIn('HP: **unbekannt**', field['value'])
+        self.assertIn('HP unbekannt', card['attachments'][0]['description'])
+        self.assertEqual(card['embeds'][0]['image']['url'], 'attachment://' + card['attachments'][0]['filename'])
+        self.assertEqual(card['embeds'][0]['fields'], [])
         self.assertIn('alle 3 Minuten', card['embeds'][0]['description'])
 
     def test_stale_card_does_not_claim_live_timer(self):
         card = payload(self.snapshot(), server='Korell', username='Test', poll_seconds=180, now_ms=NOW+999,
                        problem='Verbindung unterbrochen')
-        self.assertIn('(letzter Stand)', card['embeds'][0]['fields'][0]['value'])
+        self.assertIn('Verbindung unterbrochen', card['embeds'][0]['description'])
+        self.assertNotIn('Verbunden', card['embeds'][0]['description'])
         self.assertIn('Datenstand:', card['embeds'][0]['description'])
 
     def test_large_snapshot_respects_discord_budget(self):
         snap = self.snapshot()
         snap = replace(snap, carriers=tuple(replace(snap.carriers[0], name='X'*150+str(i), planet='P'*150, category='C'*150) for i in range(100)))
         embed = payload(snap, server='Korell', username='Test', poll_seconds=180, now_ms=NOW, delta=['x'*1000]*30)['embeds'][0]
-        size = len(embed['title']) + len(embed['description']) + len(embed['footer']['text'])
+        size = len(embed['title']) + len(embed['description'])
         size += sum(len(f['name'])+len(f['value']) for f in embed['fields'])
         self.assertLessEqual(size, 6000)
         self.assertLessEqual(len(embed['fields']), 25)

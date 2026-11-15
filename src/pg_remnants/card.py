@@ -10,11 +10,14 @@ LABELS = {
     'sol.name': 'Sol', 'draconis.name': 'Draconis', 'sirius.name': 'Sirius',
     '$taucetimantis.name': 'Tau Ceti / Oort', 'tauceti.name': 'Tau Ceti',
     'mizar2planet': 'Molikar', 'draconis2planet': 'Mantis Hive',
+    'gemini3planet': 'Prosperous', 'gemini4planet': 'Commerce Central', 'gemini5planet': 'Technatoria',
     'mantis1planet': 'Erebos', 'sol3invadedplanet': 'Erde (in Aufruhr)',
     '$item.category.activeitem.tank': 'Item der Tank-Klasse',
     '$item.category.activeitem.storm': 'Item der Storm-Klasse',
     '$item.category.activeitem.hijacker': 'Item der Räuber-Klasse',
     '$item.category.activeitem.defender': 'Item der Verteidiger-Klasse',
+    '$item.category.activeitem.medic': 'Item der Engineer-Klasse',
+    '$item.category.activeitem.energizer': 'Item der Enervator-Klasse',
     '$item.category.activeitem.shock': 'Item der Shock-Klasse',
     '$item.category.activeitem.sniper': 'Item der Sniper-Klasse',
     '$item.category.shipupgrade.alloy': 'Legierungs-Upgrade',
@@ -32,36 +35,27 @@ def label(value: str | None) -> str:
 
 def payload(snapshot: Snapshot | None, *, server: str, username: str, poll_seconds: int,
             now_ms: int, delta: list[str] = (), problem: str | None = None) -> dict:
-    stale = problem is not None
     count = len(snapshot.carriers) if snapshot else 0
-    status = f'🟠 {problem}' if stale else '🟢 Verbunden'
+    status = f'🟠 {safe(problem, 180)}' if problem else '🟢 Verbunden'
     description = f'{status} · **{count} Träger** · Aktualisierung alle {poll_seconds // 60} Minuten'
     if snapshot:
         description += f'\nDatenstand: <t:{snapshot.observed_ms // 1000}:F> · <t:{snapshot.observed_ms // 1000}:R>'
     else:
         description += '\nNoch kein bestätigter Datenstand.'
-    fields = []
-    for carrier in (snapshot.carriers[:15] if snapshot else ()):
-        health = 'unbekannt' if carrier.hp is None else f'{carrier.hp} %'
-        departure = 'unbekannt' if carrier.departure_ms is None else f'<t:{carrier.departure_ms // 1000}:R>'
-        if stale and carrier.departure_ms is not None:
-            departure = f'<t:{carrier.departure_ms // 1000}:t> (letzter Stand)'
-        value = (f'**{label(carrier.system)}** · {label(carrier.planet)}\n'
-                 f'{label(carrier.category)}\nHP: **{health}** · Abflug: {departure}\n'
-                 f'Gemeldeter Spawn: <t:{carrier.spawn_ms // 1000}:f>')
-        fields.append({'name': ('🟣 ' if carrier.kind == 'boss' else '🟡 ') + safe(carrier.name),
-                       'value': value[:600], 'inline': False})
-    if count > 15:
-        description += f'\nAnzeige: 15 von {count}; vollständiger Stand im lokalen Verlauf.'
-    if delta and not stale:
-        fields.append({'name': 'Seit dem letzten Abruf', 'value': '\n'.join(safe(s, 150) for s in delta)[:900], 'inline': False})
-    # Discord caps the aggregate embed text at 6000 characters.
-    while sum(len(f['name']) + len(f['value']) for f in fields) + len(description) > 5600:
-        fields.pop()
-        if 'Gekürzte' not in description:
-            description += '\nGekürzte Anzeige; vollständiger Stand im lokalen Verlauf.'
+    filename = f'remnants-{now_ms}.png'
+    alternative = f'Remnant-Träger auf {server}. ' + (problem + '. ' if problem else '')
+    for carrier in (snapshot.carriers if snapshot else ()):
+        health = 'unbekannt' if carrier.hp is None else f'{carrier.hp} Prozent'
+        alternative += (f'{carrier.name}: {LABELS.get(carrier.system, carrier.system) or "System unbekannt"}, '
+                        f'{LABELS.get(carrier.planet, carrier.planet) or "Planet unbekannt"}, '
+                        f'{LABELS.get(carrier.category, carrier.category) or "Beute unbekannt"}, HP {health}. ')
+    if delta and not problem:
+        meaningful = [line for line in delta if line not in ('Keine Änderungen seit dem letzten Abruf', 'Erster erfasster Stand')]
+        if meaningful:
+            description += '\n' + safe(' · '.join(meaningful), 350)
     return {'username': username[:80], 'allowed_mentions': {'parse': []},
+            'attachments': [{'id': 0, 'filename': filename, 'description': alternative[:1024]}],
             'embeds': [{'title': f'Remnant-Träger · {safe(server, 80)}', 'description': description,
-                        'color': 0xE69A35 if stale else 0x3AC7A4, 'fields': fields,
-                        'timestamp': datetime.fromtimestamp(now_ms / 1000, UTC).isoformat(),
-                        'footer': {'text': 'Pirate Galaxy Remnant Tracker · Unbekannt bleibt unbekannt'}}]}
+                        'color': 0xE69A35 if problem else 0xE9C653, 'fields': [],
+                        'image': {'url': 'attachment://' + filename},
+                        'timestamp': datetime.fromtimestamp(now_ms / 1000, UTC).isoformat()}]}

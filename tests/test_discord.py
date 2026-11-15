@@ -3,6 +3,8 @@ import json
 import tempfile
 import unittest
 import urllib.error
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 
 from tests.helpers import NOW
@@ -80,3 +82,46 @@ class DiscordTests(unittest.TestCase):
         Publisher(URL, self.store, opener=opener).publish({}, NOW)
         Publisher(URL.replace('/0/', '/1/'), self.store, opener=opener).publish({}, NOW+1)
         self.assertEqual([r.method for r in opener.requests], ['POST','POST'])
+
+    def test_api_v10_preserves_existing_unversioned_message_identity(self):
+        opener=Opener([{'id':'11','channel_id':'22'}, {'id':'11','channel_id':'22'}])
+        Publisher(URL,self.store,opener=opener).publish({},NOW)
+        Publisher(URL.replace('/api/','/api/v10/'),self.store,opener=opener).publish({},NOW+1)
+        self.assertEqual([r.method for r in opener.requests],['POST','PATCH'])
+        self.assertTrue(all('/api/v10/webhooks/' in r.full_url for r in opener.requests))
+
+    def test_png_replaces_attachment_on_same_message_and_preserves_binary(self):
+        from pg_remnants.card import payload
+        png=b'\x89PNG\r\n\x1a\n\x00\xfftest'
+        replies=[{'id':'11','channel_id':'22','attachments':[{'id':str(i),'filename':f'remnants-{NOW+i}.png'}]} for i in (0,1)]
+        opener=Opener(replies)
+        publisher=Publisher(URL,self.store,opener=opener)
+        for i in (0,1):
+            body=payload(None,server='Korell',username='Test',poll_seconds=180,now_ms=NOW+i)
+            publisher.publish(body,NOW+i,image=png)
+        self.assertEqual([r.method for r in opener.requests],['POST','PATCH'])
+        for i,request in enumerate(opener.requests):
+            mime=BytesParser(policy=policy.default).parsebytes(
+                ('Content-Type: '+request.get_header('Content-type')+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+request.data)
+            parts=list(mime.iter_parts())
+            self.assertEqual(parts[0].get_param('name',header='Content-Disposition'),'payload_json')
+            data=json.loads(parts[0].get_payload(decode=True))
+            self.assertEqual(data['attachments'],[{'id':0,'filename':f'remnants-{NOW+i}.png','description':'Remnant-Träger auf Korell. '}])
+            self.assertEqual(data['allowed_mentions'],{'parse':[]})
+            self.assertEqual(parts[1].get_param('name',header='Content-Disposition'),'files[0]')
+            self.assertEqual(parts[1].get_payload(decode=True),png)
+
+    def test_discord_must_confirm_replacement_attachment(self):
+        from pg_remnants.card import payload
+        body=payload(None,server='Korell',username='Test',poll_seconds=180,now_ms=NOW)
+        with self.assertRaises(DiscordError):
+            Publisher(URL,self.store,opener=Opener([{'id':'11','channel_id':'22','attachments':[]}, {'id':'11','channel_id':'22','attachments':[]}])).publish(
+                body,NOW,image=b'\x89PNG\r\n\x1a\nexample')
+
+    def test_file_consumed_into_embed_is_confirmed_without_separate_attachment(self):
+        from pg_remnants.card import payload
+        body=payload(None,server='Korell',username='Test',poll_seconds=180,now_ms=NOW)
+        response={'id':'11','channel_id':'22','attachments':[],
+                  'embeds':[{'image':{'url':f'https://cdn.discordapp.com/attachments/22/123/remnants-{NOW}.png'}}]}
+        receipt=Publisher(URL,self.store,opener=Opener([response])).publish(body,NOW,image=b'\x89PNG\r\n\x1a\nexample')
+        self.assertEqual(receipt['attachment_id'],'123')

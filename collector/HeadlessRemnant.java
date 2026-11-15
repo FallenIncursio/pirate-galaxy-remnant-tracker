@@ -15,6 +15,7 @@ public final class HeadlessRemnant {
     static boolean stopping(){return Files.exists(Paths.get(System.getenv("PG_STOP_FILE")));}
     static volatile Object playerData;
     static volatile boolean disconnected;
+    static volatile boolean expectedDisconnect;
     static volatile String screenType="login";
     static String cid="";
     static final List<Object> objects=Collections.synchronizedList(new ArrayList<Object>());
@@ -66,7 +67,7 @@ public final class HeadlessRemnant {
         });
     }
     static Object connect(String host,int port,int realm)throws Exception{
-        bd events=new bd(){public void dq(){emit("connection_open");}public void dr(){disconnected=true;emit("connection_closed");}};
+        bd events=new bd(){public void dq(){emit("connection_open");}public void dr(){if(!expectedDisconnect){disconnected=true;emit("connection_closed");}}};
         Object network=type("ek").getConstructor(bd.class).newInstance(events);
         invoke(network,"do",new Class<?>[]{int.class,type("ke")},realm,handler());
         invoke(network,"case",new Class<?>[]{String.class,int.class},host,port);
@@ -86,19 +87,13 @@ public final class HeadlessRemnant {
         emit("credential_login","result_code",result.mJ());if(result.mJ()!=0)throw new Fatal();
         if(result.mI())cid=result.getComputerID();return login;
     }
-    public static void main(String[] args)throws Exception{
-        output=Paths.get(System.getenv("PG_OUTPUT"));
-        Thread timeout=new Thread(()->{try{while(true){Thread.sleep(1000);if(System.nanoTime()>deadline){emit("failure","type","DeadlineExceeded","fatal",false);System.exit(4);}}}catch(Exception ignored){}});timeout.setDaemon(true);timeout.start();
-        emit("start","headless",System.getProperty("java.awt.headless"),"entry_point","HeadlessRemnant","pid",java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0]);
-        if(!java.awt.GraphicsEnvironment.isHeadless())throw new IllegalStateException("Headless mode required");
-        Object network=null;int exitCode=1;
+    static Object openSession(int realmId)throws Exception{
+        Object network=null;boolean ready=false;
         try{
-            Class<?> clockMode=type("pw$do");
-            type("pw").getMethod("do",long.class,clockMode).invoke(null,10L,Enum.valueOf((Class)clockMode,"MILLISECONDS"));
             network=connect("game3.pg.eu.splitscreenserver.com",443,5);
             ILoginControl login=login(network);
             LoginRealmAvatar[] pilots=login.requestRealmAvatars("de");emit("pilots","count",pilots==null?null:pilots.length);
-            int realmId=setting("PG_REALM_ID",2);int matching=0;
+            int matching=0;
             if(pilots!=null)for(LoginRealmAvatar pilot:pilots)if(pilot.getRealm().mq().getRealmId()==realmId)matching++;
             if(matching!=1)throw new Fatal();
             LoginRealmAvatar selected=login.getLoginRealmAvatar("de",realmId);
@@ -106,7 +101,7 @@ public final class HeadlessRemnant {
             emit("selected_realm","realm_id",realmId,"realm_name",realm.getRealmName(),"host",realm.md(),"port",realm.me());
             if(realm.md()==null||!realm.md().endsWith(".pg.eu.splitscreenserver.com"))throw new Fatal();
             if(!login.isLocalRealm(realmId)){
-                call(network,"disconnect");Thread.sleep(500);disconnected=false;
+                expectedDisconnect=true;call(network,"disconnect");Thread.sleep(500);expectedDisconnect=false;disconnected=false;
                 network=connect(realm.md(),realm.me(),realmId);login=login(network);
             }
             Object account=login.checkRealmAccount(selected.getName());emit("realm_account","present",account!=null);if(account==null)throw new Fatal();
@@ -121,21 +116,43 @@ public final class HeadlessRemnant {
                 for(Object obj:new ArrayList<Object>(objects)){if(obj instanceof afw){Map<String,Object> f=new LinkedHashMap<>();f.put("key","skullcarrierunlocked");f.put("present",((afw)obj).eF("skullcarrierunlocked"));features.add(f);}}
             }
             emit("unlock_evidence","flags",features);
-            ach intel=(ach)api(network,false,"com.splitscreen.ach");
-            int interval=setting("PG_SAMPLE_SECONDS",180),limit=setting("PG_MAX_SAMPLES",0),sample=0;
+            ready=true;return network;
+        }finally{if(!ready&&network!=null){expectedDisconnect=true;try{call(network,"disconnect");}catch(Exception ignored){}}}
+    }
+    public static void main(String[] args)throws Exception{
+        output=Paths.get(System.getenv("PG_OUTPUT"));
+        Thread timeout=new Thread(()->{try{while(true){Thread.sleep(1000);if(System.nanoTime()>deadline){emit("failure","type","DeadlineExceeded","fatal",false);System.exit(4);}}}catch(Exception ignored){}});timeout.setDaemon(true);timeout.start();
+        emit("start","headless",System.getProperty("java.awt.headless"),"entry_point","HeadlessRemnant","pid",java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0]);
+        if(!java.awt.GraphicsEnvironment.isHeadless())throw new IllegalStateException("Headless mode required");
+        Object network=null;int exitCode=1;
+        try{
+            Class<?> clockMode=type("pw$do");
+            type("pw").getMethod("do",long.class,clockMode).invoke(null,10L,Enum.valueOf((Class)clockMode,"MILLISECONDS"));
+            int realmId=setting("PG_REALM_ID",2),interval=setting("PG_SAMPLE_SECONDS",180),limit=setting("PG_MAX_SAMPLES",0),sample=0;
             if(interval<60||interval>3600)throw new Fatal();
-            long next=System.nanoTime();
-            while(!stopping()&&!disconnected&&(limit==0||sample<limit)){
+            long next=0;
+            while(!stopping()&&(limit==0||sample<limit)){
+                // A returned RPC object graph reuses registered remotes within a session.
+                // Without the Remnant unlock, later intel changes were not delivered to
+                // those remotes. A normal fresh login gives an authoritative new graph.
+                while(!stopping()&&System.nanoTime()<next-TimeUnit.SECONDS.toNanos(15))Thread.sleep(250);
+                if(stopping())break;
                 deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(90);
+                expectedDisconnect=false;disconnected=false;
+                network=openSession(realmId);
+                ach intel=(ach)api(network,false,"com.splitscreen.ach");
+                while(!stopping()&&!disconnected&&System.nanoTime()<next)Thread.sleep(50);
+                if(stopping())break;
+                if(disconnected)throw new IllegalStateException("Disconnected before observation");
                 long before=System.nanoTime();ais container=intel.getSkullCarrierContainer();
                 if(container==null)throw new IllegalStateException("No Remnant container");
-                emit("snapshot","realm_id",realmId,"sample",++sample,"request_duration_ms",(System.nanoTime()-before)/1000000,"carriers",RemnantData.snapshot(container));
-                next+=TimeUnit.SECONDS.toNanos(interval);
-                if(next<System.nanoTime())next=System.nanoTime()+TimeUnit.SECONDS.toNanos(interval);
+                emit("snapshot","realm_id",realmId,"sample",++sample,"fresh_session",true,
+                     "request_duration_ms",(System.nanoTime()-before)/1000000,"carriers",RemnantData.snapshot(container));
+                next=System.nanoTime()+TimeUnit.SECONDS.toNanos(interval);
+                expectedDisconnect=true;call(network,"disconnect");network=null;
+                emit("session_released","sample",sample);
                 deadline=next+TimeUnit.SECONDS.toNanos(90);
-                while(!stopping()&&!disconnected&&System.nanoTime()<next)Thread.sleep(250);
             }
-            if(disconnected)throw new IllegalStateException("Disconnected during observation");
             emit("complete","disconnected",false);exitCode=0;
         }catch(Throwable error){
             boolean fatal=false;for(Throwable cause=error;cause!=null;cause=cause.getCause())if(cause instanceof Fatal)fatal=true;
@@ -144,6 +161,6 @@ public final class HeadlessRemnant {
                 List<String> frames=new ArrayList<>();for(StackTraceElement e:error.getStackTrace()){if(frames.size()==12)break;frames.add(e.getClassName()+"."+e.getMethodName()+":"+e.getLineNumber());}
                 emit("failure","fatal",fatal,"cause_depth",depth,"type",error.getClass().getName(),"frames",frames);
             }
-        }finally{if(network!=null)try{call(network,"disconnect");}catch(Exception ignored){}Thread.sleep(500);System.exit(exitCode);}
+        }finally{expectedDisconnect=true;if(network!=null)try{call(network,"disconnect");}catch(Exception ignored){}Thread.sleep(500);System.exit(exitCode);}
     }
 }

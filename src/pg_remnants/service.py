@@ -10,6 +10,7 @@ from .config import Config
 from .discord import DiscordError, Publisher
 from .locking import single_instance
 from .model import Snapshot
+from .render import render
 from .runtime import Collector, atomic_json
 from .storage import Store
 
@@ -31,19 +32,32 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
     started = time.monotonic()
     count, failures, retry_at, last_publish, last_valid = 0, 0, 0.0, started, 0.0
     problem, fatal, active, last_result = 'Verbindung wird aufgebaut', False, False, None
+    discord_problem = None
     status_path = config.data / 'status.json'
     def status(state):
+        if state == 'running' and discord_problem:
+            state = 'publishing_error'
         atomic_json(status_path, {'state': state, 'pid': os.getpid(), 'updated_ms': int(time.time()*1000),
                                  'snapshots_this_run': count, 'last_observed_ms': snapshot.observed_ms if snapshot else None,
                                  'discord': last_result, 'dry_run': dry_run, 'poll_seconds': config.poll_seconds,
-                                 'problem': problem})
+                                 'problem': problem or discord_problem})
     def publish(reason=None, delta=()):
-        nonlocal last_publish, last_result
+        nonlocal last_publish, last_result, discord_problem
         now_ms = int(time.time()*1000)
         card = payload(snapshot, server=config.server, username=config.username, poll_seconds=config.poll_seconds,
                        now_ms=now_ms, delta=delta, problem=reason)
+        png = render(snapshot, server=config.server, poll_seconds=config.poll_seconds, now_ms=now_ms,
+                     problem=reason, history=store.intel_history(snapshot) if snapshot else {})
+        image_path = config.data / 'status-card.png'
+        image_path.with_suffix('.tmp').write_bytes(png)
+        os.replace(image_path.with_suffix('.tmp'), image_path)
         if publisher:
-            last_result = publisher.publish(card, now_ms)
+            try:
+                last_result = publisher.publish(card, now_ms, image=png)
+            except DiscordError:
+                discord_problem = 'Discord-Aktualisierung fehlgeschlagen'
+                raise
+            discord_problem = None
             last_result['published_ms'] = now_ms
             with (config.data / 'publications.jsonl').open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps(last_result) + '\n')
@@ -67,6 +81,8 @@ def _run(config: Config, *, cycles: int, dry_run: bool, max_seconds: int) -> int
                 kind = event.get('event')
                 if kind == 'snapshot':
                     candidate = Snapshot.from_event(event, config.realm_id, int(time.time()*1000))
+                    if not candidate.fresh_session:
+                        raise ValueError('Collector snapshot lacks a fresh authenticated session')
                     delta = store.record(candidate, config.retention_days)
                     snapshot, last_valid, failures, problem = candidate, now, 0, None
                     count += 1

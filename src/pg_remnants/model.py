@@ -48,13 +48,14 @@ class Snapshot:
     realm_id: int
     observed_ms: int
     carriers: tuple[Carrier, ...]
+    fresh_session: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, raw: dict) -> Snapshot:
-        return cls(raw['realm_id'], raw['observed_ms'], tuple(Carrier(**c) for c in raw['carriers']))
+        return cls(raw['realm_id'], raw['observed_ms'], tuple(Carrier(**c) for c in raw['carriers']), raw.get('fresh_session', False))
 
     @classmethod
     def from_event(cls, event: dict, expected_realm: int, now_ms: int) -> Snapshot:
@@ -81,7 +82,8 @@ class Snapshot:
                                     hp, departure))
         if len({c.key for c in carriers}) != len(carriers):
             raise ValueError('Ambiguous duplicate carrier identity')
-        return cls(realm, observed, tuple(sorted(carriers, key=lambda c: (c.system or '', c.spawn_ms, c.name))))
+        return cls(realm, observed, tuple(sorted(carriers, key=lambda c: (c.system or '', c.spawn_ms, c.name))),
+                   event.get('fresh_session') is True)
 
 
 def changes(previous: Snapshot | None, current: Snapshot) -> list[str]:
