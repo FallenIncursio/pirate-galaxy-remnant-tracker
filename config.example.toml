@@ -1,0 +1,22 @@
+[tracker]
+server = "Korell"
+realm_id = 2
+poll_seconds = 180
+retention_days = 30
+
+[runtime]
+# Local credential file with Name: and PW: lines. Never commit it.
+credentials_file = 'C:\private\PG Cred.txt'
+manifest = "data/runtime/manifest.json"
+
+[sandbox]
+start = 'C:\Program Files\Sandboxie-Plus\Start.exe'
+box = "PirateGalaxyRemnants"
+root = 'D:\PirateGalaxyRemnantTracker\data\sandbox'
+
+[paths]
+data = "data"
+
+[discord]
+username = "Remnant Tracker"
+webhook_environment = "DISCORD_WEBHOOK_URL"

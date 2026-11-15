@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pirate-galaxy-remnant-tracker"
+version = "0.1.0"
+description = "Headless Pirate Galaxy Remnant carrier tracking with persistent Discord status"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "FallenIncursio"}]
+dependencies = []
+
+[project.scripts]
+pg-remnants = "pg_remnants.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
