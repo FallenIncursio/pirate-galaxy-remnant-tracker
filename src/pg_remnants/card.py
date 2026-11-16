@@ -24,6 +24,7 @@ LABELS = {
     'gemini1planet': 'Desai', 'gemini2planet': 'Iga',
     'gemini3planet': 'Prosperous', 'gemini4planet': 'Commerce Central', 'gemini5planet': 'Technatoria',
     'mantis1planet': 'Erebos', 'sol3invadedplanet': 'Erde (in Aufruhr)',
+    'tauceti1planet': 'Vénar', 'tauceti2planet': 'Calon',
     '$item.category.activeitem.tank': 'Item der Tank-Klasse',
     '$item.category.activeitem.storm': 'Item der Storm-Klasse',
     '$item.category.activeitem.hijacker': 'Item der Räuber-Klasse',
